@@ -23,6 +23,7 @@
 #include <unistd.h>  // it is required to close the socket descriptor
 #include <math.h>
 #include <time.h>
+#include <stdarg.h>
 
 #define  jsonSIZE  10000
 #define  msgSIZE   2048      /* longitud maxima parametro entrada/salida */
@@ -45,7 +46,7 @@ void aborta_handler(int sig){
 /* ===== ESTADO DEL JUEGO ===== */
 #define MAX_PLAYERS  8
 #define TOTAL_ROUNDS 5
-#define COUNTDOWN_SECS 15
+#define COUNTDOWN_SECS 5
 
 typedef enum {
     STATE_WAITING_FIRST,
@@ -98,10 +99,17 @@ void reset_session() {
 }
 
 /* Función: manda el estado del juego al cliente */
-void send_state(char* state){
-	snprintf(json, jsonSIZE, "%s\n", state);
-	send(sd_actual, json, strlen(json), 0);
-	printf("JSON enviado: %s", json);
+void send_state(const char* format, ...) {
+    char buffer[jsonSIZE];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    // Agregamos el salto de línea para el protocolo del cliente
+    strcat(buffer, "\n");
+    send(sd_actual, buffer, strlen(buffer), 0);
+    printf("Enviado al cliente: %s", buffer);
 }
 
 int main(){
@@ -158,196 +166,92 @@ addrlen = sizeof(pin);
 	//strcpy(json," ");
 	json[0] = '\0';
 	while (sigue == 'S') {
-		int n = recv(sd_actual, msg, sizeof(msg) - 1, 0);
-		if (n <= 0) {
-			if (n == 0) printf("Cliente desconectado.\n");
-			else        perror("recv");
-			break;
-		}
-		msg[n] = '\0';
-		/* quitar el \n del protocolo si viene */
-		if (n > 0 && msg[n-1] == '\n') msg[n-1] = '\0';
-		printf("Cliente envió: %s\n", msg);
+        int n = recv(sd_actual, msg, sizeof(msg) - 1, 0);
+        if (n <= 0) break;
+        msg[n] = '\0';
+        if (n > 0 && msg[n-1] == '\n') msg[n-1] = '\0';
+        printf("\n[Log] Cliente dice: %s\n", msg);
 
-		json[0] = '\0';  /* limpiar respuesta */
+        switch (game_state) {
+            case STATE_WAITING_FIRST:
+                if (strncmp(msg, "JOIN|", 5) == 0) {
+                    strncpy(username, msg + 5, sizeof(username) - 1);
+                    if (strlen(username) > 0) {
+                        send_state("WAIT");
+                        game_state = STATE_WAITING_ALL;
+						
+                    } else {
+                        send_state("ERROR|username_invalido");
+                        break; 
+                    }
+                } else {
+                    send_state("ERROR|esperando_JOIN");
+                    break;
+                }
 
-		/* ---- máquina de estados ---- */
-		switch (game_state) {
+            case STATE_WAITING_ALL:
+                for (int t = COUNTDOWN_SECS; t >= 0; t--) {
+                    send_state("COUNTDOWN|%d", t);
+                    sleep(1);
+                }
+                game_state = STATE_START;
 
-		/* -------------------------------------------------- */
-		case STATE_WAITING_FIRST:
-			snprintf(json, jsonSIZE, "WAITING_FIRST\n");
-			send(sd_actual, json, strlen(json), 0);
-			printf("JSON enviado: %s", json);
+            case STATE_START:
+                generate_colors();
+                current_round = 1;
+                send_state("START");
+                game_state = STATE_ROUND;
 
-			/* Esperamos JOIN|username */
-			if (strncmp(msg, "JOIN|", 5) == 0) {
-				strncpy(username, msg + 5, sizeof(username) - 1);
-				username[sizeof(username)-1] = '\0';
+            case STATE_ROUND:
+                send_state("ROUND|%d", current_round);
+                sleep(1);
+                game_state = STATE_SHOW_COLOR;
 
-				if (strlen(username) == 0) {
-					snprintf(json, jsonSIZE, "ERROR|username_invalido\n");
-				} else {
-					printf("Jugador registrado: %s\n", username);
-					game_state = STATE_WAITING_ALL;
+            case STATE_SHOW_COLOR:
+                send_state("SHOW_COLOR|%d|%d|%d", 
+                            colors[current_round-1].r, 
+                            colors[current_round-1].g, 
+                            colors[current_round-1].b);
+                sleep(3);
+                game_state = STATE_INPUT_PHASE;
+                send_state("INPUT_PHASE");
+                break; 
 
-					snprintf(json, jsonSIZE, "WAIT\n");
-					send(sd_actual, json, strlen(json), 0);
-					printf("JSON enviado: %s", json);
+            case STATE_INPUT_PHASE:
+                if (strncmp(msg, "GUESS|", 6) == 0) {
+                    int gr, gg, gb;
+                    if (sscanf(msg + 6, "%d|%d|%d", &gr, &gg, &gb) == 3) {
+                        double sim = compute_similarity(colors[current_round-1].r, colors[current_round-1].g, colors[current_round-1].b, gr, gg, gb);
+                        player_score += (sim * 100.0);
 
-				}
-			} else {
-				snprintf(json, jsonSIZE, "ERROR|esperando_JOIN\n");
-			}
+                        if (current_round < TOTAL_ROUNDS) {
+                            current_round++;
+                            send_state("WAIT");
+                            sleep(1);
 
-		/* -------------------------------------------------- */
-		case STATE_WAITING_ALL:
-			/* Iniciar countdown y transición a START */
-			snprintf(json, jsonSIZE, "WAITING_ALL\n");
-			send(sd_actual, json, strlen(json), 0);
-			printf("JSON enviado: %s", json);
-			/* Countdown de 15 segundos */
-			for (int t = COUNTDOWN_SECS; t >= 0; t--) {
-				snprintf(json, jsonSIZE, "COUNTDOWN|%d\n", t);
-				send(sd_actual, json, strlen(json), 0);
-				printf("JSON enviado: %s", json);
-				sleep(1);
-			}
+                            // Mandamos la info de la nueva ronda
+                            send_state("ROUND|%d", current_round);
+                            send_state("SHOW_COLOR|%d|%d|%d", colors[current_round-1].r, colors[current_round-1].g, colors[current_round-1].b);
+                            sleep(3);
+                            send_state("INPUT_PHASE");
 
-			game_state = STATE_START;
-		
-		case STATE_START:
-			/* Generar colores y arrancar juego */
-			generate_colors();
-			current_round = 0;
+                            // Nos quedamos en INPUT_PHASE esperando el siguiente GUESS
+                            game_state = STATE_INPUT_PHASE; 
+                        } else {
+                            send_state("CALCULATING_RANKINGS"); 
+                            send_state("RESULT|%s|%.0f|1", username, player_score);
+                            send_state("END");
+                            sigue = 'N';
+                        }
+                    }
+                }
+                break;
 
-			snprintf(json, jsonSIZE, "START\n");
-			send(sd_actual, json, strlen(json), 0);
-			printf("JSON enviado: %s", json);
-
-			game_state = STATE_ROUND;
-		
-		case STATE_ROUND:
-			/* Arrancar primera ronda de inmediato */
-			current_round = 1;
-			snprintf(json, jsonSIZE, "ROUND|%d\n", current_round);
-			send(sd_actual, json, strlen(json), 0);
-			printf("JSON enviado: %s", json);
-
-			sleep(1);
-			game_state = STATE_SHOW_COLOR;
-		
-		case STATE_SHOW_COLOR:
-			/* Mostrar color de la ronda */
-			snprintf(json, jsonSIZE, "SHOW_COLOR|%d|%d|%d\n",
-				colors[current_round-1].r,
-				colors[current_round-1].g,
-				colors[current_round-1].b);
-			send(sd_actual, json, strlen(json), 0);
-			printf("JSON enviado: %s", json);
-
-			sleep(3);  /* tiempo para que el jugador vea el color */
-
-			/* Pedir input */
-			game_state = STATE_INPUT_PHASE;
-			snprintf(json, jsonSIZE, "INPUT_PHASE\n");
-			/* esta respuesta se manda al final del switch */
-			break;
-			
-		/* -------------------------------------------------- */
-				
-		case STATE_INPUT_PHASE:
-			/* Esperamos GUESS|r|g|b */
-			if (strncmp(msg, "GUESS|", 6) == 0) {
-				int gr, gg, gb;
-				if (sscanf(msg + 6, "%d|%d|%d", &gr, &gg, &gb) == 3) {
-					double sim = compute_similarity(
-						colors[current_round-1].r,
-						colors[current_round-1].g,
-						colors[current_round-1].b,
-						gr, gg, gb);
-					double puntos = sim * 100.0;
-					player_score += puntos;
-					printf("Ronda %d — similitud: %.3f — puntos: %.1f — total: %.1f\n",
-						current_round, sim, puntos, player_score);
-
-					if (current_round < TOTAL_ROUNDS) {
-						/* Siguiente ronda */
-						current_round++;
-						game_state = STATE_ROUND;
-
-						snprintf(json, jsonSIZE, "WAIT\n");
-						send(sd_actual, json, strlen(json), 0);
-						printf("JSON enviado: %s", json);
-						sleep(1);
-
-						snprintf(json, jsonSIZE, "ROUND|%d\n", current_round);
-						send(sd_actual, json, strlen(json), 0);
-						printf("JSON enviado: %s", json);
-						sleep(1);
-
-						game_state = STATE_SHOW_COLOR;
-						snprintf(json, jsonSIZE, "SHOW_COLOR|%d|%d|%d\n",
-							colors[current_round-1].r,
-							colors[current_round-1].g,
-							colors[current_round-1].b);
-						send(sd_actual, json, strlen(json), 0);
-						printf("JSON enviado: %s", json);
-						sleep(3);
-
-						game_state = STATE_INPUT_PHASE;
-						snprintf(json, jsonSIZE, "INPUT_PHASE\n");
-
-					} else {
-						/* Última ronda terminada */
-						game_state = STATE_CALCULATING_RANKINGS;
-						snprintf(json, jsonSIZE, "CALCULATING_RANKINGS\n");
-						send(sd_actual, json, strlen(json), 0);
-						printf("JSON enviado: %s", json);
-
-						/* Calcular y enviar resultado final */
-						snprintf(json, jsonSIZE, "RESULT|%s|%.0f|1\n",
-							username, player_score);
-						send(sd_actual, json, strlen(json), 0);
-						printf("JSON enviado: %s", json);
-
-						/* Enviar END y resetear */
-						snprintf(json, jsonSIZE, "END\n");
-						send(sd_actual, json, strlen(json), 0);
-						printf("JSON enviado: %s", json);
-
-						printf("Partida terminada. Reseteando sesión.\n");
-						reset_session();
-						sigue = 'N';  /* cerrar conexión con este cliente */
-						json[0] = '\0';
-					}
-				} else {
-					snprintf(json, jsonSIZE, "ERROR|guess_malformado\n");
-				}
-			} else {
-				snprintf(json, jsonSIZE, "ERROR|esperando_GUESS\n");
-			}
-		
-		case STATE_WAIT:
-			snprintf(json, jsonSIZE, "WAIT\n");
-			break;
-
-		/* -------------------------------------------------- */
-		default:
-			snprintf(json, jsonSIZE, "ERROR|estado_inesperado\n");
-			break;
-		}
-
-		/* Enviar respuesta pendiente (si quedó algo en json) */
-		if (strlen(json) > 0) {
-			printf("JSON enviado: %s", json);
-			int sent = send(sd_actual, json, strlen(json), 0);
-			if (sent == -1) {
-				perror("send");
-				break;
-			}
-		}
-	}
+            default:
+                send_state("ERROR|estado_desconocido");
+                break;
+        }
+    }
 
 /* cerrar los dos sockets */
 	close(sd_actual);  
