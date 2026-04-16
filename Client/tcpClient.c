@@ -151,7 +151,6 @@ int main(int argc, char *argv[]) {
             line = strtok(NULL, "\n");
         }
     }
-
     close(sd);
     return 0;
 }
