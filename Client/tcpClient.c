@@ -108,23 +108,36 @@ int main(int argc, char *argv[]) {
                 printf("Server: Memoriza este color: R=%d, G=%d, B=%d\n", r, g, b);
             } 
             else if (strncmp(line, "INPUT_PHASE", 11) == 0) {
-                int r = 0, g = 0, b = 0;
-                printf("\nIngresa tu intento (Tres numeros separados por espacio R G B): ");
+                printf("\nIngresa tu intento (Tres numeros separados por espacio R G B) [Tienes 28 seg]: ");
+                fflush(stdout); /* Imprimir texto antes de leer input */
+
+                fd_set readfds;
+                struct timeval tv = {28, 0};
+                FD_ZERO(&readfds);
+                FD_SET(0, &readfds); /* Escuchar al teclado  */
                 
-                if (scanf("%d %d %d", &r, &g, &b) == 3) {
-                    char msg_send[256];
-                    snprintf(msg_send, sizeof(msg_send), "GUESS|%d|%d|%d\n", r, g, b);
-                    send(sd, msg_send, strlen(msg_send), 0);
-                } else {
-                    /* Manejo de error si el usuario no mete numeros */
-                    printf("Entrada invalida. Enviando color 0 0 0 por defecto.\n");
+                /* Esperara hasta que el usuario escriba, o hasta que pasen los 28s */
+                int activity = select(1, &readfds, NULL, NULL, &tv);
+                
+                if (activity > 0) {
+                    /* Si el usuario escribió algo antes de los 28 segundos */
+                    char input_buf[256];
+                    int r = 0, g = 0, b = 0;
+
+                    /* Usamos fgets en lugar de scanf para limpiar bien el salto de línea */
+                    if (fgets(input_buf, sizeof(input_buf), stdin) != NULL && sscanf(input_buf, "%d %d %d", &r, &g, &b) == 3) {
+                        char msg_buffer[256];
+                        snprintf(msg_buffer, sizeof(msg_buffer), "GUESS|%d|%d|%d\n", r, g, b);
+                        send(sd, msg_buffer, strlen(msg_buffer), 0);
+                    } else {
+                        printf("Entrada invalida. Enviando color 0 0 0 por defecto.\n");
+                        send(sd, "GUESS|0|0|0\n", 12, 0);
+                    }
+                } else{
+                    printf("\n¡Tiempo agotado! Se acabó tu turno.\n");
                     send(sd, "GUESS|0|0|0\n", 12, 0);
-                    
-                    /* Limpiar el buffer del teclado */
-                    int c;
-                    while ((c = getchar()) != '\n' && c != EOF);
                 }
-            } 
+            }
             else if (strncmp(line, "CALCULATING_RANKINGS", 20) == 0) {
                 printf("\nServer: Calculando los resultados finales...\n");
             } 
