@@ -50,7 +50,7 @@ void aborta_handler(int sig){
 /* ===== ESTADO DEL JUEGO ===== */
 #define MAX_PLAYERS  8
 #define TOTAL_ROUNDS 5
-#define COUNTDOWN_SECS 5
+#define COUNTDOWN_SECS 15
 #define MAX_USERNAME_LEN 64
 
 typedef enum {
@@ -331,6 +331,7 @@ int main(){
     server_PID = getpid();
 	char  msg[msgSIZE];	     /* parametro entrada y salida */
 	char  json[jsonSIZE];	     /* parametro entrada y salida */
+    signal(SIGCHLD, SIG_IGN);
 
 	/*
 	When the user presses <Ctrl + C>, the aborta_handler function will be called, 
@@ -342,7 +343,6 @@ int main(){
    	perror("Could not set signal handler");
       return 1;
    }
-       //signal(SIGINT, aborta);      /* activando la senal SIGINT */
 
 /* obtencion de un socket tipo internet */
 	if ((sd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
@@ -428,7 +428,18 @@ int main(){
                             if (strncmp(msg, "JOIN|", 5) == 0) {
                                 strncpy(username, msg + 5, sizeof(username) - 1);
                                 if (strlen(username) > 0) {
-                                    add_player(players_connected++, client_sd, username);
+                                    bool exists = false;
+                                    for(int i=0; i < players_connected; i++) {
+                                        if(strcmp(Players[i].username, username) == 0) {
+                                            exists = true; break;
+                                        }
+                                    }
+                                    if(exists) {
+                                        send_to(client_sd, "ERROR|username_tomado");
+                                        close(client_sd);
+                                    } else {
+                                        add_player(players_connected++, client_sd, username);
+                                    }
                                 } else {
                                     send_to(client_sd, "ERROR|username_invalido");
                                     break; 
@@ -481,27 +492,78 @@ int main(){
             case STATE_INPUT_PHASE:
                 cmd_send_all("INPUT_PHASE");
 
-                for(int i = 0; i < players_connected; i++){
-                    char guess[msgSIZE];
-                    int n = read(Players[i].pipe_guess[0], guess, sizeof(guess)-1);
+                int players_responded = 0;
+                bool responded[MAX_PLAYERS] = {false};
+                time_t start_time = time(NULL);
+                int TIMEOUT_INPUT = 30;
+
+                for(int i = 0; i < players_connected; i++) {
+                    if(!Players[i].is_active) {
+                        responded[i] = true;
+                        players_responded++;
+                    }
+                }
+                
+                while(players_responded < players_connected){
+                    if (time(NULL) - start_time > TIMEOUT_INPUT) {
+                        printf("[Log] Timeout. Algunos jugadores no respondieron.\n");
+                        break; // Se sale del loop, los que no respondieron no ganan puntos
+                    }
+
+                    fd_set readfds;
+                    FD_ZERO(&readfds);
+                    int max_fd = 0;
+
+                    for(int i = 0; i < players_connected; i++){
+                        if(!responded[i] && Players[i].is_active){
+                            FD_SET(Players[i].pipe_guess[0], &readfds);
+                            if(Players[i].pipe_guess[0] > max_fd)
+                                max_fd = Players[i].pipe_guess[0];
+                        }
+                    }
+
+                    struct timeval tv;
+                    tv.tv_sec = 1; tv.tv_usec = 0; // Revisar cada segundo
+
+                    int activity = select(max_fd + 1, &readfds, NULL, NULL, &tv);
                     
-                    if(n > 0){
-                        printf("[Log] Lectura recibida: %s", guess);
-                        guess[n] = '\0';
-                        if(guess[n-1] == '\n') guess[n-1] = '\0';
-                        int gr, gg, gb;
-                        if (sscanf(guess, "GUESS|%d|%d|%d", &gr, &gg, &gb) == 3) {
-                            double sim = compute_similarity(
-                                colors[current_round-1].r,
-                                colors[current_round-1].g,
-                                colors[current_round-1].b,
-                                gr, gg, gb
-                            );
-                            Players[i].score += sim * 100.0;
+                    if(activity > 0) {
+                        for(int i = 0; i < players_connected; i++){
+                            if(!responded[i] && FD_ISSET(Players[i].pipe_guess[0], &readfds)){
+                                char guess[msgSIZE];
+                                int n = read(Players[i].pipe_guess[0], guess, sizeof(guess)-1);
+                                
+                                if(n > 0){
+                                    if(strncmp(guess, "DISCONNECT", 10) == 0){
+                                        printf("[Log] Jugador %s se desconectó.\n", Players[i].username);
+                                        Players[i].is_active = false;
+                                    } else {
+                                        printf("[Log] Lectura recibida: %s", guess);
+                                        guess[n] = '\0';
+                                        if(guess[n-1] == '\n') guess[n-1] = '\0';
+                                        int gr, gg, gb;
+                                        if (sscanf(guess, "GUESS|%d|%d|%d", &gr, &gg, &gb) == 3) {
+                                            double sim = compute_similarity(
+                                                colors[current_round-1].r,
+                                                colors[current_round-1].g,
+                                                colors[current_round-1].b,
+                                                gr, gg, gb
+                                            );
+                                            Players[i].score += sim * 100.0;
+                                        }
+                                    }
+                                } else {
+                                    // Error en el pipe o desconexión abrupta
+                                    Players[i].is_active = false;
+                                }
+                                responded[i] = true;
+                                players_responded++;
+                            }
                         }
                     }
                 }
                 
+                // Evaluar siguiente ronda o final
                 if (current_round < TOTAL_ROUNDS) {
                     current_round++;
                     cmd_send_all("WAIT");
@@ -516,19 +578,20 @@ int main(){
                     }
                     
                     cmd_send_all("END");
+                    sleep(1);
                     reset_session();
                 }
                 break;
 
             default:
-                send_to(sd_actual, "ERROR|estado_desconocido");
+                printf("Estado desconocido.\n");
                 break;
-        }
     }
-
+}
 /* cerrar los dos sockets */
 	close(sd_actual);  
     close(sd);
     printf("Conexion cerrada\n");
 	return 0;
 }
+
