@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Color Matcher | UP Computo Distribuido</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        :root { --bg: #121212; --card: #1e1e1e; --accent: #007bff; --text: #e0e0e0; }
+        body { 
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            background-color: var(--bg); 
+            color: var(--text); 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            min-height: 100vh; 
+            margin: 0; 
+        }
+        .container { 
+            background: var(--card); 
+            padding: 2.5rem; 
+            border-radius: 15px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6); 
+            width: 90%; 
+            max-width: 500px; 
+            margin-top: 50px; 
+            text-align: center;
+        }
+        .screen { display: none; }
+        .active { display: block; }
+        h1 { color: var(--accent); margin-bottom: 1.5rem; }
+        input[type="text"] { 
+            width: 90%; 
+            padding: 12px; 
+            border-radius: 8px; 
+            border: 1px solid #333; 
+            background: #252525; 
+            color: white;
+            margin-bottom: 1.5rem; 
+        }
+        button { 
+            background: var(--accent); 
+            color: white; 
+            border: none; 
+            padding: 12px 25px; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-weight: bold; 
+            font-size: 1rem;
+            transition: 0.3s; 
+            margin-top: 10px;
+        }
+        button:hover { background: #0056b3; transform: translateY(-2px); }
+        .color-box { 
+            width: 100%; 
+            height: 160px; 
+            border-radius: 12px; 
+            margin: 20px 0; 
+            border: 4px solid #333; 
+        }
+        .slider-group { text-align: left; margin: 25px 0; }
+        .slider-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="range"] { width: 100%; margin-bottom: 15px; cursor: pointer; }
+        #countdown { font-size: 4rem; font-weight: bold; color: #ff4757; margin: 10px 0; }
+        .footer { margin-top: auto; padding: 25px; font-size: 0.85rem; color: #777; text-align: center; line-height: 1.4; }
+        
+        /* Estilos del Podio Top 3 */
+        .ranking-list { list-style: none; padding: 0; margin: 20px 0; }
+        .ranking-item { 
+            background: #2a2a2a; 
+            padding: 15px; 
+            margin-bottom: 10px; 
+            border-radius: 8px; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            border-left: 5px solid #555;
+        }
+        .podium-1 { border-left-color: #ffd700; background: rgba(255, 215, 0, 0.1); }
+        .podium-2 { border-left-color: #c0c0c0; background: rgba(192, 192, 192, 0.1); }
+        .podium-3 { border-left-color: #cd7f32; background: rgba(205, 127, 50, 0.1); }
+        
+        .rank-pos { font-size: 1.5rem; font-weight: bold; width: 45px; text-align: left;}
+        .rank-name { font-size: 1.2rem; flex-grow: 1; text-align: left; padding-left: 10px; }
+        .rank-score { font-size: 1.2rem; font-weight: bold; color: #4cd137; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div id="start-screen" class="screen active">
+            <h1>Color Matcher</h1>
+            <p>Proyecto Computo Distribuido</p>
+            <input type="text" id="username" placeholder="Tu nombre de usuario...">
+            <br>
+            <button onclick="joinGame()">ENTRAR AL JUEGO</button>
+        </div>
+
+        <div id="waiting-screen" class="screen">
+            <h2 id="wait-title">Esperando Jugadores</h2>
+            <div id="countdown">--</div>
+            <p id="wait-msg">Sincronizando con el servidor de C...</p>
+        </div>
+
+        <div id="display-screen" class="screen">
+            <h2 id="round-title">RONDA</h2>
+            <p>Memoriza el color objetivo:</p>
+            <div id="target-color" class="color-box"></div>
+            <p>Analizando espectro...</p>
+        </div>
+
+        <div id="input-screen" class="screen">
+            <h2>Tu Intento</h2>
+            <div id="preview-color" class="color-box" style="background-color: rgb(127,127,127);"></div>
+            <div class="slider-group">
+                <label>Rojo (R): <span id="rv">127</span></label>
+                <input type="range" id="r" min="0" max="255" value="127" oninput="updatePreview()">
+                
+                <label>Verde (G): <span id="gv">127</span></label>
+                <input type="range" id="g" min="0" max="255" value="127" oninput="updatePreview()">
+                
+                <label>Azul (B): <span id="bv">127</span></label>
+                <input type="range" id="b" min="0" max="255" value="127" oninput="updatePreview()">
+            </div>
+            <button onclick="sendGuess()">ENVIAR COLOR</button>
+        </div>
+
+        <div id="results-screen" class="screen">
+            <h2>¡Partida Terminada!</h2>
+            <p>🏆 Podio Final 🏆</p>
+            
+            <ul id="ranking-container" class="ranking-list">
+                <li class="ranking-item podium-1">
+                    <span class="rank-pos">🥇 1</span>
+                    <span class="rank-name" id="name-1">---</span>
+                    <span class="rank-score" id="score-1">---</span>
+                </li>
+                <li class="ranking-item podium-2">
+                    <span class="rank-pos">🥈 2</span>
+                    <span class="rank-name" id="name-2">---</span>
+                    <span class="rank-score" id="score-2">---</span>
+                </li>
+                <li class="ranking-item podium-3">
+                    <span class="rank-pos">🥉 3</span>
+                    <span class="rank-name" id="name-3">---</span>
+                    <span class="rank-score" id="score-3">---</span>
+                </li>
+            </ul>
+            
+            <button onclick="location.reload()">Jugar de Nuevo</button>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <strong>Universidad Panamericana</strong><br>
+        Distributed Computing | Dr. Juan Carlos López Pimentel<br>
+        José Carlos Béjar • Carlos Santiago • Rodrigo López
+    </footer>
+
+    <script>
+        const socket = io();
+
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            const target = document.getElementById(id);
+            if(target) target.classList.add('active');
+        }
+
+        function joinGame() {
+            const user = document.getElementById('username').value.trim();
+            if (!user) return alert("Por favor ingresa un nombre");
+            socket.emit('unirse', {user: user});
+            showScreen('waiting-screen');
+        }
+
+        function updatePreview() {
+            const r = document.getElementById('r').value;
+            const g = document.getElementById('g').value;
+            const b = document.getElementById('b').value;
+            document.getElementById('rv').innerText = r;
+            document.getElementById('gv').innerText = g;
+            document.getElementById('bv').innerText = b;
+            document.getElementById('preview-color').style.backgroundColor = `rgb(${r},${g},${b})`;
+        }
+
+        function sendGuess() {
+            const r = document.getElementById('r').value;
+            const g = document.getElementById('g').value;
+            const b = document.getElementById('b').value;
+            socket.emit('enviar_intento', {r: r, g: g, b: b});
+            
+            document.getElementById('wait-title').innerText = "Intento Recibido";
+            document.getElementById('wait-msg').innerText = "Esperando que los demás terminen...";
+            document.getElementById('countdown').innerText = "✓";
+            showScreen('waiting-screen');
+        }
+
+        // Lógica de comunicación con el Servidor (vía Python)
+        socket.on('mensaje_servidor', function(data) {
+            const rawMsg = data.msg.trim();
+            const parts = rawMsg.split('|');
+
+            // 1. Manejo de Inicio/Espera
+            if (rawMsg.startsWith("COUNTDOWN")) {
+                showScreen('waiting-screen');
+                document.getElementById('countdown').innerText = parts[1];
+            } 
+            // 2. Manejo de Rondas
+            else if (rawMsg.startsWith("ROUND")) {
+                document.getElementById('round-title').innerText = "RONDA " + parts[1];
+            }
+            // 3. Mostrar Color a Memorizar
+            else if (rawMsg.startsWith("SHOW_COLOR")) {
+                const color = `rgb(${parts[1]}, ${parts[2]}, ${parts[3]})`;
+                document.getElementById('target-color').style.backgroundColor = color;
+                showScreen('display-screen');
+            }
+            // 4. Fase de Juego (Sliders)
+            else if (rawMsg.startsWith("INPUT_PHASE")) {
+                showScreen('input-screen');
+            }
+            // 5. Interceptar los resultados y llenar el Podio
+            else if (rawMsg.startsWith("RESULT")) {
+                const username = parts[1];
+                const score = parseFloat(parts[2]).toFixed(0); // Redondeamos los puntos
+                const position = parseInt(parts[3]);
+                
+                // Si está en el Top 3, rellenamos el espacio fijo
+                if (position >= 1 && position <= 3) {
+                    document.getElementById('name-' + position).innerText = username;
+                    document.getElementById('score-' + position).innerText = score + ' pts';
+                } 
+                // Si hay 4 o más jugadores, los agregamos como una lista normal abajo del podio
+                else {
+                    const li = document.createElement('li');
+                    li.className = 'ranking-item';
+                    li.innerHTML = `
+                        <span class="rank-pos">#${position}</span>
+                        <span class="rank-name">${username}</span>
+                        <span class="rank-score">${score} pts</span>
+                    `;
+                    document.getElementById('ranking-container').appendChild(li);
+                }
+            }
+            // 6. Fin del Juego
+            else if (rawMsg.startsWith("END")) {
+                showScreen('results-screen');
+            }
+        });
+
+        // Debug de conexión
+        socket.on('connect', () => console.log("Conectado a la GUI de Python"));
+        socket.on('disconnect', () => console.log("Desconectado de la GUI"));
+    </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+services:
+  juego-server:
+    build: ./Server
+    container_name: servidor_c_rodrigo
+    ports:
+      - "5000:5000"
+
+  juego-gui:
+    build: ./Client
+    container_name: gui_jose_carlos
+    ports:
+      - "5001:5001"
+    depends_on:
+      - juego-server
+    environment:
+      - SERVER_HOST=juego-server
+      - PYTHONUNBUFFERED=1
