@@ -65,7 +65,7 @@
         #countdown { font-size: 4rem; font-weight: bold; color: #ff4757; margin: 10px 0; }
         .footer { margin-top: auto; padding: 25px; font-size: 0.85rem; color: #777; text-align: center; line-height: 1.4; }
         
-        /* Estilos del Podio Top 3 */
+        /* Podio */
         .ranking-list { list-style: none; padding: 0; margin: 20px 0; }
         .ranking-item { 
             background: #2a2a2a; 
@@ -80,10 +80,59 @@
         .podium-1 { border-left-color: #ffd700; background: rgba(255, 215, 0, 0.1); }
         .podium-2 { border-left-color: #c0c0c0; background: rgba(192, 192, 192, 0.1); }
         .podium-3 { border-left-color: #cd7f32; background: rgba(205, 127, 50, 0.1); }
-        
         .rank-pos { font-size: 1.5rem; font-weight: bold; width: 45px; text-align: left;}
         .rank-name { font-size: 1.2rem; flex-grow: 1; text-align: left; padding-left: 10px; }
         .rank-score { font-size: 1.2rem; font-weight: bold; color: #4cd137; }
+
+        /* Instructions dropdown */
+        .instructions-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            cursor: pointer;
+            color: #888;
+            font-size: 0.9rem;
+            margin-bottom: 1.2rem;
+            user-select: none;
+            transition: color 0.2s;
+        }
+        .instructions-toggle:hover { color: var(--accent); }
+        .instructions-toggle .arrow {
+            display: inline-block;
+            transition: transform 0.25s ease;
+            font-style: normal;
+            font-size: 0.75rem;
+        }
+        .instructions-toggle.open .arrow { transform: rotate(180deg); }
+
+        .instructions-body {
+            display: none;
+            background: #252525;
+            border-radius: 10px;
+            padding: 1rem 1.2rem;
+            margin-bottom: 1.4rem;
+            text-align: left;
+            font-size: 0.88rem;
+            color: #bbb;
+            line-height: 1.6;
+        }
+        .instructions-body.open { display: block; }
+
+        .instructions-body ol {
+            margin: 0;
+            padding-left: 1.2rem;
+        }
+        .instructions-body li { margin-bottom: 0.5rem; }
+        .instructions-body li:last-child { margin-bottom: 0; }
+
+        .instructions-body .tip {
+            margin-top: 0.8rem;
+            padding-top: 0.8rem;
+            border-top: 1px solid #333;
+            font-size: 0.82rem;
+            color: #666;
+        }
     </style>
 </head>
 <body>
@@ -92,8 +141,25 @@
         <div id="start-screen" class="screen active">
             <h1>Color Matcher</h1>
             <p>Proyecto Computo Distribuido</p>
+
             <input type="text" id="username" placeholder="Tu nombre de usuario...">
-            <br>
+
+            <!-- Instructions dropdown -->
+            <div class="instructions-toggle" id="instr-toggle" onclick="toggleInstructions()">
+                <span>¿Cómo se juega?</span>
+                <span class="arrow">▼</span>
+            </div>
+            <div class="instructions-body" id="instr-body">
+                <ol>
+                    <li>Enter your username and click <strong>ENTER</strong> — a 15-second lobby starts for others to join.</li>
+                    <li>Each round, a color flashes on screen. <strong>Memorize it.</strong></li>
+                    <li>Use the <strong>R, G, B sliders</strong> to recreate the color from memory.</li>
+                    <li>The closer your guess, the more points you earn.</li>
+                    <li>After <strong>5 rounds</strong>, the final scoreboard is revealed.</li>
+                </ol>
+                <p class="tip">📱 On mobile? Connect to the same Wi-Fi as the server and open the link.</p>
+            </div>
+
             <button onclick="joinGame()">ENTRAR AL JUEGO</button>
         </div>
 
@@ -161,6 +227,13 @@
     <script>
         const socket = io();
 
+        function toggleInstructions() {
+            const toggle = document.getElementById('instr-toggle');
+            const body = document.getElementById('instr-body');
+            toggle.classList.toggle('open');
+            body.classList.toggle('open');
+        }
+
         function showScreen(id) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
             const target = document.getElementById(id);
@@ -196,43 +269,34 @@
             showScreen('waiting-screen');
         }
 
-        // Lógica de comunicación con el Servidor (vía Python)
         socket.on('mensaje_servidor', function(data) {
             const rawMsg = data.msg.trim();
             const parts = rawMsg.split('|');
 
-            // 1. Manejo de Inicio/Espera
             if (rawMsg.startsWith("COUNTDOWN")) {
                 showScreen('waiting-screen');
                 document.getElementById('countdown').innerText = parts[1];
             } 
-            // 2. Manejo de Rondas
             else if (rawMsg.startsWith("ROUND")) {
                 document.getElementById('round-title').innerText = "RONDA " + parts[1];
             }
-            // 3. Mostrar Color a Memorizar
             else if (rawMsg.startsWith("SHOW_COLOR")) {
                 const color = `rgb(${parts[1]}, ${parts[2]}, ${parts[3]})`;
                 document.getElementById('target-color').style.backgroundColor = color;
                 showScreen('display-screen');
             }
-            // 4. Fase de Juego (Sliders)
             else if (rawMsg.startsWith("INPUT_PHASE")) {
                 showScreen('input-screen');
             }
-            // 5. Interceptar los resultados y llenar el Podio
             else if (rawMsg.startsWith("RESULT")) {
                 const username = parts[1];
-                const score = parseFloat(parts[2]).toFixed(0); // Redondeamos los puntos
+                const score = parseFloat(parts[2]).toFixed(0);
                 const position = parseInt(parts[3]);
                 
-                // Si está en el Top 3, rellenamos el espacio fijo
                 if (position >= 1 && position <= 3) {
                     document.getElementById('name-' + position).innerText = username;
                     document.getElementById('score-' + position).innerText = score + ' pts';
-                } 
-                // Si hay 4 o más jugadores, los agregamos como una lista normal abajo del podio
-                else {
+                } else {
                     const li = document.createElement('li');
                     li.className = 'ranking-item';
                     li.innerHTML = `
@@ -243,13 +307,11 @@
                     document.getElementById('ranking-container').appendChild(li);
                 }
             }
-            // 6. Fin del Juego
             else if (rawMsg.startsWith("END")) {
                 showScreen('results-screen');
             }
         });
 
-        // Debug de conexión
         socket.on('connect', () => console.log("Conectado a la GUI de Python"));
         socket.on('disconnect', () => console.log("Desconectado de la GUI"));
     </script>
